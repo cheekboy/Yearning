@@ -2,12 +2,12 @@ from __future__ import absolute_import, unicode_literals
 import logging
 import functools
 import threading
+import ast
 import time
 from django.http import HttpResponse
 from libs import send_email, util
 from libs import call_inception
 from .models import (
-    Usermessage,
     DatabaseList,
     Account,
     globalpermissions,
@@ -17,6 +17,35 @@ from .models import (
 )
 
 CUSTOM_ERROR = logging.getLogger('Yearning.core.views')
+
+def set_auth_group(user):
+    perm = {
+        'ddl': '0',
+        'ddlcon': [],
+        'dml': '0',
+        'dmlcon': [],
+        'dic': '0',
+        'diccon': [],
+        'dicedit': '0',
+        'user': '0',
+        'base': '0',
+        'dicexport': '0',
+        'person': [],
+        'query': '0',
+        'querycon': []
+    }
+    group = Account.objects.filter(username=user).first()
+    group_list = str(group.auth_group).split(',')
+    for group_name in group_list:
+        auth = grained.objects.filter(username=group_name).first()
+        if auth is not None:
+            for k, v in perm.items():
+                if isinstance(v, list):
+                    v = list(set(v) | set(auth.permissions[k]))
+                elif v == '0':
+                    v = auth.permissions[k]
+                perm[k] = v
+    return perm
 
 
 def grained_permissions(func):
@@ -38,8 +67,8 @@ def grained_permissions(func):
             if permissions_type == 'own_space' or permissions_type == 'query':
                 return func(self, request, args)
             else:
-                user = grained.objects.filter(username=request.user).first()
-                if user is not None and user.permissions[permissions_type] == '1':
+                group = set_auth_group(request.user)
+                if group is not None and group[permissions_type] == '1':
                     return func(self, request, args)
                 else:
                     return HttpResponse(status=401)
@@ -136,24 +165,18 @@ class order_push_message(threading.Thread):
 
     def con_close(self):
 
-        Usermessage.objects.get_or_create(
-            from_user=self.from_user, time=util.date(),
-            title=self.title, content='该工单已审核通过!', to_user=self.to_user,
-            state='unread'
-        )
-
         content = DatabaseList.objects.filter(id=self.order.bundle_id).first()
         mail = Account.objects.filter(username=self.to_user).first()
         tag = globalpermissions.objects.filter(authorization='global').first()
 
         if tag.message['ding']:
             try:
-                if content.url:
-                    util.dingding(
-                        content='工单执行通知\n工单编号:%s\n发起人:%s\n地址:%s\n工单备注:%s\n状态:已执行\n备注:%s'
-                                % (
-                                self.order.work_id, self.order.username, self.addr_ip, self.order.text, content.after),
-                        url=content.url)
+                util.dingding(
+                    content='工单执行通知\n工单编号:%s\n发起人:%s\n地址:%s\n工单备注:%s\n状态:已执行\n备注:%s'
+                            % (
+                                self.order.work_id, self.order.username, self.addr_ip, self.order.text,
+                                content.after),
+                    url=ding_url())
             except Exception as e:
                 CUSTOM_ERROR.error(f'{e.__class__.__name__}--钉钉推送失败: {e}')
 
@@ -166,7 +189,7 @@ class order_push_message(threading.Thread):
                         'addr': self.addr_ip,
                         'text': self.order.text,
                         'note': content.after}
-                    put_mess = send_email.send_email(to_addr=mail.email)
+                    put_mess = send_email.send_email(to_addr=mail.email, ssl=tag.message['ssl'])
                     put_mess.send_mail(mail_data=mess_info, type=0)
             except Exception as e:
                 CUSTOM_ERROR.error(f'{e.__class__.__name__}--邮箱推送失败: {e}')
@@ -204,15 +227,13 @@ class rejected_push_messages(threading.Thread):
         :return: none
 
         '''
-        content = DatabaseList.objects.filter(id=self._tmpData['bundle_id']).first()
         mail = Account.objects.filter(username=self.to_user).first()
         tag = globalpermissions.objects.filter(authorization='global').first()
         if tag.message['ding']:
             try:
-                if content.url:
-                    util.dingding(
-                        content='工单驳回通知\n工单编号:%s\n发起人:%s\n地址:%s\n驳回说明:%s\n状态:驳回'
-                                % (self._tmpData['work_id'], self.to_user, self.addr_ip, self.text), url=content.url)
+                util.dingding(
+                    content='工单驳回通知\n工单编号:%s\n发起人:%s\n地址:%s\n驳回说明:%s\n状态:驳回'
+                            % (self._tmpData['work_id'], self.to_user, self.addr_ip, self.text), url=ding_url())
             except Exception as e:
                 CUSTOM_ERROR.error(f'{e.__class__.__name__}--钉钉推送失败: {e}')
         if tag.message['mail']:
@@ -223,7 +244,7 @@ class rejected_push_messages(threading.Thread):
                         'to_user': self.to_user,
                         'addr': self.addr_ip,
                         'rejected': self.text}
-                    put_mess = send_email.send_email(to_addr=mail.email)
+                    put_mess = send_email.send_email(to_addr=mail.email, ssl=tag.message['ssl'])
                     put_mess.send_mail(mail_data=mess_info, type=1)
             except Exception as e:
                 CUSTOM_ERROR.error(f'{e.__class__.__name__}--邮箱推送失败: {e}')
@@ -267,13 +288,12 @@ class submit_push_messages(threading.Thread):
         mail = Account.objects.filter(username=self.assigned).first()
         tag = globalpermissions.objects.filter(authorization='global').first()
         if tag.message['ding']:
-            if content.url:
-                try:
-                    util.dingding(
-                        content='工单提交通知\n工单编号:%s\n发起人:%s\n地址:%s\n工单说明:%s\n状态:已提交\n备注:%s'
-                                % (self.workId, self.user, self.addr_ip, self.text, content.before), url=content.url)
-                except Exception as e:
-                    CUSTOM_ERROR.error(f'{e.__class__.__name__}--钉钉推送失败: {e}')
+            try:
+                util.dingding(
+                    content='工单提交通知\n工单编号:%s\n发起人:%s\n地址:%s\n工单说明:%s\n状态:已提交\n备注:%s'
+                            % (self.workId, self.user, self.addr_ip, self.text, content.before), url=ding_url())
+            except Exception as e:
+                CUSTOM_ERROR.error(f'{e.__class__.__name__}--钉钉推送失败: {e}')
         if tag.message['mail']:
             if mail.email:
                 mess_info = {
@@ -283,7 +303,13 @@ class submit_push_messages(threading.Thread):
                     'text': self.text,
                     'note': content.before}
                 try:
-                    put_mess = send_email.send_email(to_addr=mail.email)
+                    put_mess = send_email.send_email(to_addr=mail.email, ssl=tag.message['ssl'])
                     put_mess.send_mail(mail_data=mess_info, type=99)
                 except Exception as e:
                     CUSTOM_ERROR.error(f'{e.__class__.__name__}--邮箱推送失败: {e}')
+
+
+def ding_url():
+    un_init = util.init_conf()
+    webhook = ast.literal_eval(un_init['message'])
+    return webhook['webhook']

@@ -64,14 +64,14 @@ class sqlorder(baseview.BaseView):
                         return Response({'result': res, 'status': 200})
                 except Exception as e:
                     CUSTOM_ERROR.error(f'{e.__class__.__name__}: {e}')
-                    return Response(e)
+                    return HttpResponse(e)
 
     def post(self, request, args=None):
         try:
             data = json.loads(request.data['data'])
             tmp = json.loads(request.data['sql'])
-            user = request.data['user']
             type = request.data['type']
+            real_name = request.data['real_name']
             id = request.data['id']
         except KeyError as e:
             CUSTOM_ERROR.error(f'{e.__class__.__name__}: {e}')
@@ -79,11 +79,13 @@ class sqlorder(baseview.BaseView):
         else:
             try:
                 x = [x.rstrip(';') for x in tmp]
+                if str(x[0]).lstrip().startswith('use'):
+                    del x[0]
                 sql = ';'.join(x)
                 sql = sql.strip(' ').rstrip(';')
                 workId = util.workId()
                 SqlOrder.objects.get_or_create(
-                    username=user,
+                    username=request.user,
                     date=util.date(),
                     work_id=workId,
                     status=2,
@@ -94,11 +96,12 @@ class sqlorder(baseview.BaseView):
                     backup=data['backup'],
                     bundle_id=id,
                     assigned=data['assigned'],
-                    delay=data['delay']
+                    delay=data['delay'],
+                    real_name=real_name
                 )
                 submit_push_messages(
                     workId=workId,
-                    user=user,
+                    user=request.user,
                     addr_ip=addr_ip,
                     text=data['text'],
                     assigned=data['assigned'],

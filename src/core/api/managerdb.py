@@ -58,7 +58,7 @@ class management_db(baseview.SuperUserpermissions):
                 page_number = DatabaseList.objects.count()
                 start = int(page) * 10 - 10
                 end = int(page) * 10
-                info = DatabaseList.objects.all()[start:end]
+                info = DatabaseList.objects.all().order_by('connection_name')[start:end]
                 serializers = Sqllist(info, many=True)
                 data = SqlDictionary.objects.all().values('Name')
                 data.query.group_by = ['Name']  # 不重复表名
@@ -166,18 +166,18 @@ class management_db(baseview.SuperUserpermissions):
         '''
 
         try:
-            connection_name = request.GET.get('del')
             with transaction.atomic():
-                con_id = DatabaseList.objects.filter(connection_name=connection_name).first()
+                con_id = DatabaseList.objects.filter(connection_name=args).first()
                 work_id = SqlOrder.objects.filter(bundle_id=con_id.id).first()
-                SqlRecord.objects.filter(workid=work_id).delete()
-                SqlOrder.objects.filter(bundle_id=con_id.id).delete()
-                DatabaseList.objects.filter(connection_name=connection_name).delete()
+                with transaction.atomic():
+                    SqlRecord.objects.filter(workid=work_id).delete()
+                    SqlOrder.objects.filter(bundle_id=con_id.id).delete()
+                    DatabaseList.objects.filter(connection_name=args).delete()
                 per = grained.objects.all().values('username', 'permissions')
                 for i in per:
                     for c in i['permissions']:
                         if isinstance(i['permissions'][c], list) and c != 'diccon':
-                            i['permissions'][c] = list(filter(lambda x: x != connection_name, i['permissions'][c]))
+                            i['permissions'][c] = list(filter(lambda x: x != args, i['permissions'][c]))
                     grained.objects.filter(username=i['username']).update(permissions=i['permissions'])
             return Response('数据库信息已删除!')
         except Exception as e:
@@ -212,13 +212,12 @@ class dingding(baseview.SuperUserpermissions):
             con_id = request.data['id']
             before = request.data['before']
             after = request.data['after']
-            url = request.data['url']
         except KeyError as e:
             CUSTOM_ERROR.error(f'{e.__class__.__name__}: {e}')
             return HttpResponse(status=500)
         else:
             try:
-                DatabaseList.objects.filter(id=con_id).update(before=before, after=after, url=url)
+                DatabaseList.objects.filter(id=con_id).update(before=before, after=after)
                 return Response('ok')
             except Exception as e:
                 CUSTOM_ERROR.error(f'{e.__class__.__name__}: {e}')

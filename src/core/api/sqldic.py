@@ -15,7 +15,7 @@ from core.models import (
     DatabaseList,
     grained
 )
-from core.task import grained_permissions
+from core.task import grained_permissions,set_auth_group
 
 CUSTOM_ERROR = logging.getLogger('Yearning.core.views')
 
@@ -43,7 +43,7 @@ class adminpremisson(baseview.SuperUserpermissions):
                 db=basename,
                 port=_connection.port
         ) as f:
-            res = f.tablename()
+            res = f.baseItems(sql='show tables')
             for i in res:
                 EveryData = f.showtable(table_name=i)
                 for c in EveryData:
@@ -431,8 +431,8 @@ class dictionary(baseview.BaseView):
     def get(self, request, args=None):
         try:
             _type = request.GET.get('permissions_type') + 'con'
-            permission = grained.objects.filter(username=request.user).first()
-            _c = [x for x in permission.permissions[_type]]
+            permission = set_auth_group(request.user)
+            _c = [x for x in permission[_type]]
             return Response(_c)
         except Exception as e:
             CUSTOM_ERROR.error(f'{e.__class__.__name__}: {e}')
@@ -474,8 +474,8 @@ class exportdoc(baseview.SuperUserpermissions):
         else:
             try:
                 _c = request.data['permissions_type'] + 'export'
-                permissions = grained.objects.filter(username=request.user).first()
-                if permissions.permissions[_c] == '0':
+                permissions = set_auth_group(request.user)
+                if permissions[_c] == '0':
                     return Response(
                         {
                             'status': '该账户没有导出数据字典权限',
